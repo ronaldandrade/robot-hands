@@ -1,8 +1,7 @@
 # Robot Hands — Controle de Mão Robótica 3D por Gestos
 
 Recriação do projeto do Murtaza's Workshop: a webcam rastreia suas mãos (até
-duas), o Python calcula o ângulo de cada dedo (como se fossem servos) e duas
-mãos robóticas 3D no navegador copiam seus movimentos em tempo real.
+duas), o Python calcula o ângulo de cada dedo e duas mãos robóticas 3D no navegador copiam seus movimentos em tempo real.
 
 ```
 Webcam ─► OpenCV + MediaPipe ─► ângulos 0–180° ─► WebSocket ─► Three.js (navegador)
