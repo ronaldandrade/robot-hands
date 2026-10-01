@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Servo Hands MK-1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f2f3f5;
+    --ink: #1d2230;
+    --muted: #6b7280;
+    --accent: #2f7df6;
+    --panel: rgba(255, 255, 255, 0.85);
+    --track: #d9dce2;
+    --bad: #e5484d;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); }
+  body { font-family: "JetBrains Mono", monospace; }
+  #scene { position: fixed; inset: 0; }
+
+  header { position: fixed; top: 24px; left: 28px; pointer-events: none; }
+  .logo { font: 600 34px "Oswald", sans-serif; letter-spacing: 2px; color: var(--accent); }
+  h1 { font: 600 30px "Oswald", sans-serif; letter-spacing: 1px; margin-top: 4px; }
+  h1 span { color: var(--accent); }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  .on .dot { background: var(--accent); box-shadow: 0 0 0 4px rgba(47,125,246,.18); }
+
+  /* rótulo do gesto: posicionado via JS sobre a base de cada mão */
+  .gesture {
+    position: fixed; left: 0; top: 0;
+    font: 600 26px "Oswald", sans-serif; letter-spacing: 5px; color: #fff; white-space: nowrap;
+    background: var(--ink); padding: 4px 18px; border-radius: 10px;
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .gesture.show { opacity: 1; }
+
+  #panels {
+    position: fixed; left: 24px; right: 24px; bottom: 24px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .panel {
+    background: var(--panel); backdrop-filter: blur(8px);
+    border-radius: 14px; padding: 14px 20px; box-shadow: 0 6px 24px rgba(0,0,0,.08);
+    transition: opacity .3s;
+  }
+  .panel.off { opacity: .45; }
+  .panel h2 { font-size: 11px; font-weight: 600; letter-spacing: 1.5px; color: var(--accent); margin-bottom: 10px; }
+  .panel.off h2 { color: var(--muted); }
+  .fingers { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .finger .name { font-size: 12px; font-weight: 600; letter-spacing: 1px; }
+  .finger .deg { font-size: 15px; color: var(--muted); margin: 4px 0 8px; }
+  .bar { height: 4px; background: var(--track); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .08s linear; }
+
+  #demo {
+    position: fixed; top: 24px; right: 28px; font: inherit; font-size: 12px;
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--track);
+    background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  #demo.active { background: var(--ink); color: #fff; }
+
+  @media (max-width: 640px) {
+    header { left: 16px; top: 16px; }
+    .logo { font-size: 24px; } h1 { font-size: 22px; }
+    #panels { left: 16px; right: 16px; bottom: 16px; grid-template-columns: 1fr; gap: 10px; }
+    .panel { padding: 10px 12px; }
+    .panel h2 { margin-bottom: 6px; }
+    .fingers { gap: 8px; }
+    .finger .name { font-size: 9px; } .finger .deg { font-size: 12px; margin: 2px 0 5px; }
+    .gesture { font-size: 18px; padding: 3px 12px; letter-spacing: 3px; }
+    #demo { right: 16px; top: 16px; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<header>
+  <div class="logo">ROBOT HANDS</div>
+  <h1>SERVO HANDS <span>MK-1</span></h1>
+  <div class="status" id="status"><i class="dot"></i><span id="statusText">Waiting for Python…</span></div>
+</header>
+
+<button id="demo" title="Anima as mãos sem a webcam">Demo</button>
+<div class="gesture" id="gesture-left"></div>
+<div class="gesture" id="gesture-right"></div>
+<div id="panels"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const FINGERS = ["thumb", "index", "middle", "ring", "pinky"];
+const SIDES = ["left", "right"];
+const SIDE_NAME = { left: "LEFT HAND", right: "RIGHT HAND" };
+const WS_URL = `ws://${location.hostname || "localhost"}:8765`;
+
+// ---------- UI ----------
+const panels = document.getElementById("panels");
+const ui = {};
+for (const side of SIDES) {
+  const panel = document.createElement("section");
+  panel.className = "panel off";
+  panel.innerHTML = `<h2>${SIDE_NAME[side]}</h2><div class="fingers"></div>`;
+  panels.appendChild(panel);
+  ui[side] = { panel, gesture: document.getElementById(`gesture-${side}`), fingers: {}, last: "" };
+  for (const f of FINGERS) {
+    const el = document.createElement("div");
+    el.className = "finger";
+    el.innerHTML = `<div class="name">${f.toUpperCase()}</div><div class="deg">–</div><div class="bar"><i></i></div>`;
+    panel.querySelector(".fingers").appendChild(el);
+    ui[side].fingers[f] = { deg: el.querySelector(".deg"), bar: el.querySelector(".bar i") };
+  }
+}
+const statusEl = document.getElementById("status");
+const statusText = document.getElementById("statusText");
+
+// ---------- Cena ----------
+const container = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f3f5);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+const VIEW_DIR = new THREE.Vector3(0.12, 0.1, 1).normalize();
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.0, 0);
+controls.enableDamping = true;
+controls.minDistance = 3;
+controls.maxDistance = 30;
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(4, 8, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 7, bottom: -3 });
+scene.add(sun, new THREE.HemisphereLight(0xffffff, 0xbfc4cc, 0.6));
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.12 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// ---------- Materiais ----------
+const matBody  = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.55, metalness: 0.2 });
+const matPlate = new THREE.MeshStandardMaterial({ color: 0x23262d, roughness: 0.4, metalness: 0.35 });
+const matMetal = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.25, metalness: 0.9 });
+const matServo = new THREE.MeshStandardMaterial({ color: 0x1f6fe0, roughness: 0.45, metalness: 0.1 });
+
+function mesh(geo, mat, parent, pos = [0, 0, 0]) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(...pos);
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+// ---------- Robô ----------
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const rbox = (w, h, d, r = 0.03) => {
+  // caixa com cantos levemente arredondados (chanfro via ExtrudeGeometry)
+  const s = new THREE.Shape();
+  const x = -w / 2, y = -h / 2;
+  s.moveTo(x + r, y); s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+  s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
+  s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+  const g = new THREE.ExtrudeGeometry(s, { depth: d, bevelEnabled: true, bevelSize: 0.015, bevelThickness: 0.015, bevelSegments: 2 });
+  g.translate(0, 0, -d / 2);
+  return g;
+};
+const pin = (len, r = 0.055) => {
+  const g = new THREE.CylinderGeometry(r, r, len, 20);
+  g.rotateZ(Math.PI / 2); // eixo ao longo de X (eixo de rotação da junta)
+  return g;
+};
+
+/**
+ * Cria um dedo como cadeia de juntas.
+ * Cada junta é um Group que gira; o próximo segmento fica pendurado na ponta do anterior.
+ */
+function makeFinger(parent, lengths, width, curlAxis) {
+  const joints = [];
+  let p = parent;
+  lengths.forEach((len, i) => {
+    const joint = new THREE.Group();
+    joint.position.y = i === 0 ? 0 : lengths[i - 1];
+    p.add(joint);
+    mesh(pin(width + 0.06), matMetal, joint);
+    // duas placas laterais + corpo central = visual de link de servo
+    const w = width * (1 - i * 0.06);
+    mesh(rbox(w, len - 0.06, 0.2, 0.04), matBody, joint, [0, len / 2, 0]);
+    mesh(box(0.025, len * 0.8, 0.24), matPlate, joint, [-w / 2 - 0.012, len / 2, 0]);
+    mesh(box(0.025, len * 0.8, 0.24), matPlate, joint, [w / 2 + 0.012, len / 2, 0]);
+    if (i === lengths.length - 1) {
+      mesh(new THREE.SphereGeometry(w / 2, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), matBody, joint, [0, len - 0.03, 0]);
+    }
+    joints.push(joint);
+    p = joint;
+  });
+  return { joints, axis: curlAxis.clone().normalize() };
+}
+
+const X = new THREE.Vector3(1, 0, 0);
+const PALM_H = 1.15;
+const FINGER_SPEC = {
+  index:  { x: -0.37, len: [0.62, 0.42, 0.34], w: 0.2 },
+  middle: { x: -0.12, len: [0.68, 0.46, 0.36], w: 0.21 },
+  ring:   { x:  0.13, len: [0.64, 0.43, 0.34], w: 0.2 },
+  pinky:  { x:  0.37, len: [0.5, 0.34, 0.28], w: 0.18 },
+};
+
+/**
+ * Monta uma mão robótica completa (base, antebraço, palma, dedos).
+ * O modelo é uma mão direita com a palma virada para a câmera;
+ * a esquerda é a mesma geometria espelhada em X.
+ */
+function buildRobot(side) {
+  const robot = new THREE.Group();
+  robot.position.x = side === "left" ? -1.45 : 1.45;
+  if (side === "left") robot.scale.x = -1;
+  scene.add(robot);
+
+  // Base
+  mesh(rbox(1.9, 1.3, 0.18, 0.08).rotateX(Math.PI / 2), matBody, robot, [0, 0.09, 0]);
+  mesh(rbox(1.1, 0.18, 0.7), matPlate, robot, [0, 0.27, 0]);
+  // Coluna
+  mesh(box(0.22, 1.1, 0.22), matBody, robot, [-0.32, 0.9, 0]);
+  mesh(box(0.22, 1.1, 0.22), matBody, robot, [0.32, 0.9, 0]);
+
+  // Antebraço com os 5 servos
+  const forearm = new THREE.Group();
+  forearm.position.y = 1.45;
+  robot.add(forearm);
+  mesh(rbox(1.05, 1.0, 0.5, 0.06), matBody, forearm, [0, 0, -0.05]);
+  for (let i = 0; i < 5; i++) {
+    const s = mesh(box(0.16, 0.34, 0.3), matServo, forearm, [-0.38 + i * 0.19, 0.05, 0.27]);
+    mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.06, 16).rotateX(Math.PI / 2), matMetal, s, [0, 0.1, 0.17]);
+  }
+
+  // Palma
+  const palm = new THREE.Group();
+  palm.position.y = 0.5;
+  forearm.add(palm);
+  mesh(rbox(1.08, PALM_H, 0.3, 0.1), matBody, palm, [0, PALM_H / 2 + 0.05, 0]);
+  mesh(rbox(0.85, 0.75, 0.04, 0.08), matPlate, palm, [0, PALM_H / 2 + 0.1, 0.17]);
+  // parafusos
+  for (const [x, y] of [[-0.3, 0.35], [0.3, 0.35], [-0.3, 0.95], [0.3, 0.95], [0, 0.65]]) {
+    mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.02, 12).rotateX(Math.PI / 2), matMetal, palm, [x, y, 0.2]);
+  }
+  // pulso
+  mesh(pin(0.9, 0.08), matMetal, palm, [0, 0.02, 0]);
+
+  const fingers = {};
+  for (const [name, s] of Object.entries(FINGER_SPEC)) {
+    const root = new THREE.Group();
+    root.position.set(s.x, PALM_H + 0.05, 0);
+    palm.add(root);
+    fingers[name] = makeFinger(root, s.len, s.w, X);
+  }
+  // Polegar: sai da lateral da palma, inclinado, e fecha cruzando a palma
+  const thumbRoot = new THREE.Group();
+  thumbRoot.position.set(-0.56, 0.35, 0.2);
+  thumbRoot.rotation.set(0, -0.2, 0.75);
+  palm.add(thumbRoot);
+  fingers.thumb = makeFinger(thumbRoot, [0.5, 0.4, 0.32], 0.22, new THREE.Vector3(0.45, 0, -1));
+
+  const open = Object.fromEntries(FINGERS.map(f => [f, 0]));
+  return {
+    group: robot, fingers,
+    current: { ...open }, target: { ...open },
+    // ponto 3D onde o rótulo do gesto aparece (na frente da base)
+    labelAnchor: new THREE.Vector3(robot.position.x, 0.45, 0.75),
+  };
+}
+
+const hands = Object.fromEntries(SIDES.map(side => [side, buildRobot(side)]));
+
+// Quanto cada junta flexiona com o dedo totalmente fechado (radianos)
+const MAX_CURL = { default: [1.45, 1.65, 1.2], thumb: [1.25, 0.75, 0.6] };
+const q = new THREE.Quaternion();
+
+function applyPose() {
+  for (const hand of Object.values(hands)) {
+    for (const f of FINGERS) {
+      hand.current[f] += (hand.target[f] - hand.current[f]) * 0.25;
+      const t = hand.current[f] / 180;
+      const max = MAX_CURL[f] || MAX_CURL.default;
+      const finger = hand.fingers[f];
+      finger.joints.forEach((j, i) => j.quaternion.copy(q.setFromAxisAngle(finger.axis, t * max[i])));
+    }
+  }
+}
+
+// ---------- Dados ----------
+/** data = { angles, gesture } ou null quando a mão não está visível */
+function setHand(side, data) {
+  const hand = hands[side], u = ui[side];
+  if (data) hand.target = { ...hand.target, ...data.angles };
+  else for (const f of FINGERS) hand.target[f] = 0; // volta devagar para aberta
+
+  const key = data ? JSON.stringify(data) : "";
+  if (key === u.last) return;
+  u.last = key;
+  u.panel.classList.toggle("off", !data);
+  for (const f of FINGERS) {
+    const a = data ? Math.round(data.angles[f] ?? 0) : null;
+    u.fingers[f].deg.textContent = a === null ? "–" : `${a}°`;
+    u.fingers[f].bar.style.width = `${((a ?? 0) / 180) * 100}%`;
+  }
+  const gesture = data?.gesture || "";
+  if (gesture) u.gesture.textContent = gesture;
+  u.gesture.classList.toggle("show", !!gesture);
+}
+
+function setStatus(on, text) {
+  statusEl.classList.toggle("on", on);
+  statusText.textContent = text;
+}
+
+let ws, connected = false;
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => { connected = true; setStatus(true, "Connected to Python"); };
+  ws.onmessage = (ev) => {
+    if (demoOn) return;
+    const msg = JSON.parse(ev.data);
+    for (const side of SIDES) setHand(side, msg.hands[side]);
+    const n = SIDES.filter(side => msg.hands[side]).length;
+    setStatus(true, n ? `Connected to Python · ${n} hand${n > 1 ? "s" : ""}` : "Connected — no hand detected");
+  };
+  ws.onclose = () => {
+    connected = false;
+    setStatus(false, "Waiting for Python…");
+    setTimeout(connect, 1000);
+  };
+}
+connect();
+
+// ---------- Demo (sem webcam) ----------
+const DEMO = [
+  ["OPEN",      { thumb: 0,   index: 0,   middle: 0,   ring: 0,   pinky: 0 }],
+  ["FIST",      { thumb: 170, index: 180, middle: 180, ring: 180, pinky: 180 }],
+  ["PEACE",     { thumb: 140, index: 10,  middle: 15,  ring: 175, pinky: 175 }],
+  ["POINT",     { thumb: 150, index: 5,   middle: 180, ring: 180, pinky: 180 }],
+  ["ROCK",      { thumb: 140, index: 5,   middle: 180, ring: 180, pinky: 5 }],
+  ["THUMBS UP", { thumb: 0,   index: 180, middle: 180, ring: 180, pinky: 180 }],
+];
+let demoOn = false, demoTimer;
+const demoBtn = document.getElementById("demo");
+demoBtn.onclick = () => {
+  demoOn = !demoOn;
+  demoBtn.classList.toggle("active", demoOn);
+  clearInterval(demoTimer);
+  if (!demoOn) for (const side of SIDES) setHand(side, null);
+  if (demoOn) {
+    let i = 0;
+    const step = () => {
+      // a esquerda vai 3 poses "atrasada" para as mãos ficarem diferentes
+      for (const [side, offset] of [["right", 0], ["left", 3]]) {
+        const [gesture, angles] = DEMO[(i + offset) % DEMO.length];
+        setHand(side, { angles, gesture });
+      }
+      i++;
+    };
+    step();
+    demoTimer = setInterval(step, 1600);
+  }
+};
+
+// ---------- Loop ----------
+function resize() {
+  const w = container.clientWidth, h = container.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  // distância para caber as duas mãos (≈6 de largura × 6,5 de altura)
+  const tanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const dist = Math.max(3.25 / tanHalf, 3.2 / (tanHalf * camera.aspect)) * 1.15;
+  camera.position.copy(controls.target).addScaledVector(VIEW_DIR, dist);
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+const v = new THREE.Vector3();
+function placeLabels() {
+  for (const side of SIDES) {
+    v.copy(hands[side].labelAnchor).project(camera);
+    const x = (v.x + 1) / 2 * container.clientWidth;
+    const y = (1 - v.y) / 2 * container.clientHeight;
+    ui[side].gesture.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+  }
+}
+
+renderer.setAnimationLoop(() => {
+  applyPose();
+  controls.update();
+  placeLabels();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
