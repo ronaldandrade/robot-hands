@@ -1,3 +1,11 @@
 .venv/
 __pycache__/
-models/*.task
+**/models/*.task
+
+# segredos da lâmpada (gerados pelo tinytuya wizard)
+lampada-gestos/lamp_config.json
+lampada-gestos/lamp_config.json.bak
+lampada-gestos/devices.json
+lampada-gestos/tinytuya.json
+lampada-gestos/snapshot.json
+lampada-gestos/tuya-raw.json

@@ -12,6 +12,7 @@ Uso:
 
 import argparse
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -29,6 +30,10 @@ from hand_angles import FINGERS, Smoother, detect_gesture, finger_angles
 from server import HandBroadcaster, start_http
 
 MODEL_PATH = Path(__file__).parent / "models" / "hand_landmarker.task"
+MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
 HTTP_PORT = 8000
 WS_PORT = 8765
 SEND_FPS = 30
@@ -103,12 +108,9 @@ def main():
     args = parser.parse_args()
 
     if not MODEL_PATH.exists():
-        raise SystemExit(
-            f"Modelo não encontrado em {MODEL_PATH}.\n"
-            "Baixe com:\n  curl -L -o models/hand_landmarker.task "
-            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-            "hand_landmarker/float16/latest/hand_landmarker.task"
-        )
+        MODEL_PATH.parent.mkdir(exist_ok=True)
+        print("Baixando o modelo de mãos do MediaPipe...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
 
     start_http(HTTP_PORT)
     ws = HandBroadcaster(WS_PORT)
@@ -140,7 +142,7 @@ def main():
     while True:
         ok, frame = cap.read()
         if not ok:
-            print("Falha ao ler a câmera") 
+            print("Falha ao ler a câmera")
             break
         frame = cv2.flip(frame, 1)  # efeito espelho
 
